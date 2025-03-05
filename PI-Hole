@@ -1,0 +1,7 @@
+apt update && apt upgrade  -y        ---- Container auf den neuesten Stand bringen
+apt install curl net-tools-y         ----curl installieren
+curl -SSL https://install.pi-hole.net |bash    --pihole installieren 
+
+rplist für Domain listen
+
+https://github.com/RPiList/specials/blob/master/Blocklisten.md
