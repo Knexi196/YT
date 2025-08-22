@@ -1,1 +1,163 @@
+# Firewalld abschalten:
+systemctl stop firewalld
+systemctl disable firewalld
+systemctl unmask firewalld
 
+# Iptables deaktivieren:
+systemctl stop iptables
+systemctl disable iptables
+systemctl unmask iptables
+
+# Sofortiges, aber nur temporäres Deaktivieren:
+setenforce 0
+
+# Abschalten für die Ewigkeit, wird nachdem Reboot aktiv:
+sed -i 's/^SELINUX=enforcing$/SELINUX=permissive/' /etc/selinux/config
+
+# Temporäres Deaktivieren des Swap:
+swapoff -a
+
+# Dauerhaftes Abschalten des Swap:
+sed -i '/swap/ s/^/#/' /etc/fstab
+
+# Kernel-Module temporär aktivieren:
+modprobe overlay
+modprobe br_netfilter
+
+# Kernel-Erweiterungen dauerhaft laden:
+cat <<EOF | tee /etc/modules-load.d/containerd.conf
+overlay
+br_netfilter
+EOF
+
+# Konfiguration der beiden Kernel-Module:
+cat <<EOF | tee /etc/sysctl.d/cri.conf
+net.bridge.bridge-nf-call-iptables = 1
+net.ipv4.ip_forward = 1
+net.bridge.bridge-nf-call-ip6tables = 1
+EOF
+
+# Schauen, ob die beiden Kernel-Module aktiv sind:
+lsmod | grep overlay
+lsmod | grep br_netfilter
+
+# Überprüfen der getätigten Einstellungen:
+sysctl --system
+
+# Yum-Utils installieren:
+dnf install -y yum-utils
+
+# Docker-Repo hinzufügen:
+yum-config-manager \
+    --add-repo \
+    https://download.docker.com/linux/centos/docker-ce.repo
+
+# Containerd installieren:
+dnf install -y containerd.io
+
+# Ordner für die Konfiguration anlegen:
+mkdir -p /etc/containerd
+
+# Containerd-Konfiguration erstellen:
+containerd config default | tee /etc/containerd/config.toml
+
+# Systemd-Cgroups aktivieren:
+sed -i 's/SystemdCgroup = false/SystemdCgroup = true/g' /etc/containerd/config.toml
+
+# Containerd starten & dauerhaft aktivieren:
+systemctl enable --now containerd
+
+# Download von Crictl:
+curl -L https://github.com/kubernetes-sigs/cri-tools/releases/download/v1.17.0/crictl-v1.17.0-linux-amd64.tar.gz --output crictl-v.1.17.0-linux-amd64.tar.gz
+
+# Entpacken des Tar-Verzeichnisses:
+tar zxvf crictl-v.1.17.0-linux-amd64.tar.gz -C /usr/local/bin
+
+# Konfigurieren von Crictl:
+cat <<EOF | tee /etc/crictl.yaml
+runtime-endpoint: unix:///run/containerd/containerd.sock
+image-endpoint: unix:///run/containerd/containerd.sock
+timeout: 2
+debug: true
+pull-image-on-create: false
+EOF
+
+cat <<EOF | sudo tee /etc/yum.repos.d/kubernetes.repo
+[kubernetes]
+name=Kubernetes
+baseurl=https://pkgs.k8s.io/core:/stable:/v1.32/rpm/
+enabled=1
+gpgcheck=1
+gpgkey=https://pkgs.k8s.io/core:/stable:/v1.32/rpm/repodata/repomd.xml.key
+EOF
+
+# Kubernetes-Cluster mit Kubeadm erstellen:
+kubeadm init --pod-network-cidr 10.244.0.0/16
+
+# Versteckten Ordner .kube im Home-Verzeichniss anlegen:
+mkdir -p $HOME/.kube
+
+# Symboliclink auf die Original-Konfiguration erstellen:
+ln -s /etc/kubernetes/admin.conf $HOME/.kube/config
+
+# Korrekte Datei-Berechtigungen setzen:
+chown $(id -u):$(id -g) $HOME/.kube/config
+
+# CNI-Plugin Flannel einsetzen:
+kubectl apply -f https://raw.githubusercontent.com/flannel-io/flannel/master/Documentation/kube-flannel.yml
+------------------------------------------------------------------------------------------------------------------------
+Dashboard anlegn
+
+kubectl apply -f https://raw.githubusercontent.com/kubernetes/dashboard/v2.7.0/aio/deploy/recommended.yaml
+
+kubectl get ns
+nano kuberntesdashboard
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: admin-user
+  namespace: kubernetes-dashboard
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: admin-user
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+- kind: ServiceAccount
+  name: admin-user
+  namespace: kubernetes-dashboard
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kubernetes-dashboard-nodeport
+  namespace: kubernetes-dashboard
+spec:
+  type: NodePort
+  selector:
+    k8s-app: kubernetes-dashboard
+  ports:
+    - port: 443
+      targetPort: 8443
+      nodePort: 30001  # Port auf dem Node
+
+kubectl apply -f kubernetes-dashboard.yaml
+
+kubectl -n kubernetes-dashboard get svc
+
+kubectl -n kubernetes-dashboard create token admin-user
+
+----------------------------------------------------------------------------------------------------------------------------
+# Beitrittsinformationen erneut auf dem Manager ausgeben lassen:
+kubeadm token create --print-join-command
+kubectl get nodes -o wide
+
+
+
+
+kubectl get nodes -o wide
